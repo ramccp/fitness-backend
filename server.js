@@ -18,35 +18,49 @@ dotenv.config();
 const app = express();
 
 // CORS must be FIRST - before any other middleware
+// Support multiple origins via comma-separated FRONTEND_URL or single URL
 const allowedOrigins =
   process.env.NODE_ENV === 'production'
-    ? [process.env.FRONTEND_URL]
+    ? (process.env.FRONTEND_URL || '').split(',').map(url => url.trim()).filter(Boolean)
     : ['http://localhost:5173'];
 
-app.use(cors({
+const corsOptions = {
   origin: (origin, callback) => {
     // allow server-to-server / curl / health checks
     if (!origin) return callback(null, true);
 
-    if (allowedOrigins.includes(origin)) {
+    // Normalize: remove trailing slashes for comparison
+    const normalizedOrigin = origin.replace(/\/+$/, '');
+    const normalizedAllowed = allowedOrigins.map(o => o.replace(/\/+$/, ''));
+
+    if (normalizedAllowed.includes(normalizedOrigin)) {
       return callback(null, true);
     }
+    // Log rejected origins for debugging
+    console.log(`CORS rejected origin: ${origin}, allowed: ${allowedOrigins.join(', ')}`);
     return callback(null, false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
-}));
+};
 
+app.use(cors(corsOptions));
 
-// Handle preflight requests explicitly
-app.options('*', cors());
+// Handle preflight OPTIONS requests immediately - no DB needed
+app.options('*', (req, res) => {
+  res.sendStatus(200);
+});
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Middleware to ensure DB connection before handling requests
+// Middleware to ensure DB connection before handling requests (skip for OPTIONS)
 app.use(async (req, res, next) => {
+  // OPTIONS already handled above
+  if (req.method === 'OPTIONS') {
+    return next();
+  }
   try {
     await connectDB();
     next();
